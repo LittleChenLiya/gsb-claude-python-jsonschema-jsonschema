@@ -1,6 +1,11 @@
 v4.27.0
 =======
 
+* Add a read-only ``BranchInterpreter`` which organizes the ``context`` of ``anyOf`` / ``oneOf`` validation errors into candidate branch reports, so callers can see which branch is closest to passing.
+  Branches are sorted for display by the number of distinct instance paths that failed, then by error count, then by the branch's original position; this ordering is never used to decide pass/fail.
+  All original error references are kept, nested ``context`` is supplemented, and the interpreter never re-runs validation.
+  A ``oneOf`` where more than one branch succeeded is reported as a success conflict rather than as field errors.
+  ``branch_report`` and ``format_branch_report`` are also provided.
 * Improve ``best_match`` for ``anyOf`` / ``oneOf`` errors: the most relevant error is now found within each subschema separately before the deepest of those is picked (#1257, #1300).
   In particular an applicator with a single subschema now produces the same best match as the bare subschema would.
   ``relevance`` no longer considers an error's position amongst its siblings.

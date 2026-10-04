@@ -405,3 +405,95 @@ to guess the most relevant error in a given bunch.
 
 .. autofunction:: by_relevance
     :noindex:
+
+
+Candidate branch reports for anyOf / oneOf
+------------------------------------------
+
+When an :kw:`anyOf` or :kw:`oneOf` fails, the error's ``context`` holds the
+errors produced by every candidate subschema. The `BranchInterpreter`
+organizes that context into a read-only `BranchReport`, grouping the errors
+by branch and sorting them for display so you can see which branch was
+closest to passing.
+
+The interpreter only inspects an already-produced error tree -- it never
+re-runs validation, never mutates errors, and keeps every original error
+reference.
+
+.. doctest::
+
+    >>> from jsonschema import Draft202012Validator
+    >>> from jsonschema.exceptions import BranchInterpreter, format_branch_report
+
+    >>> schema = {
+    ...     "anyOf": [
+    ...         {"type": "object", "required": ["a"]},
+    ...         {"type": "object", "required": ["a", "b", "c"]},
+    ...     ],
+    ... }
+    >>> errors = list(Draft202012Validator(schema).iter_errors({}))
+    >>> report = BranchInterpreter().interpret(errors[0])
+    >>> print(format_branch_report(report))  # doctest: +NORMALIZE_WHITESPACE
+    anyOf: 2 candidate branches
+      (branches are ordered for display by number of distinct failed instance paths, then error count, then original branch order; this is not a pass/fail determination)
+      Branch 0 -- closest to passing
+        Failed instance paths (1 path):
+          - []
+        Errors (1 error):
+          - 'a' is a required property
+              at instance path: []
+              at schema source: ['anyOf', 0, 'required']
+      Branch 1
+        Failed instance paths (1 path):
+          - []
+        Errors (3 errors):
+          - 'a' is a required property
+              at instance path: []
+              at schema source: ['anyOf', 1, 'required']
+          - 'b' is a required property
+              at instance path: []
+              at schema source: ['anyOf', 1, 'required']
+          - 'c' is a required property
+              at instance path: []
+              at schema source: ['anyOf', 1, 'required']
+
+Branches are sorted for *display only* -- by the number of distinct instance
+paths that failed, then by error count, then by the branch's original
+position. This ordering is never used to decide pass/fail; pass/fail is taken
+directly from whether a branch produced errors. For a :kw:`oneOf` where more
+than one branch succeeded, the report is a success conflict rather than a
+field failure:
+
+.. doctest::
+
+    >>> schema = {
+    ...     "oneOf": [
+    ...         {"type": "object", "required": ["x"]},
+    ...         {"type": "object", "required": ["y"]},
+    ...     ],
+    ... }
+    >>> errors = list(Draft202012Validator(schema).iter_errors({"x": 1, "y": 2}))
+    >>> report = BranchInterpreter().interpret(errors[0])
+    >>> report.conflict
+    True
+
+`branch_report` is a convenience wrapper, and `CandidateBranch` and
+`BranchReport` are the data classes produced by the interpreter.
+
+.. autoclass:: BranchInterpreter
+    :members:
+    :noindex:
+
+.. autoclass:: BranchReport
+    :members:
+    :noindex:
+
+.. autoclass:: CandidateBranch
+    :members:
+    :noindex:
+
+.. autofunction:: branch_report
+    :noindex:
+
+.. autofunction:: format_branch_report
+    :noindex:
