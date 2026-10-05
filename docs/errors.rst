@@ -405,3 +405,88 @@ to guess the most relevant error in a given bunch.
 
 .. autofunction:: by_relevance
     :noindex:
+
+
+Stopping early: error streams
+-----------------------------
+
+Sometimes you do not need *all* of the errors in an instance -- you only
+want to know whether there are more than a handful, or you want to stop
+after a fixed number. Consuming `Validator.iter_errors` directly and
+breaking out of the loop leaves a subtle problem: if you stop early you
+cannot tell whether the instance is actually valid, because you never
+finished iterating.
+
+`~jsonschema.ErrorStream` wraps the generator returned by
+`Validator.iter_errors` and tracks whether validation actually completed.
+It is only marked complete once the underlying generator is exhausted
+normally:
+
+.. doctest::
+
+    >>> from jsonschema import ErrorStream
+
+    >>> schema = {
+    ...     "type": "object",
+    ...     "properties": {
+    ...         "a": {"type": "number"},
+    ...         "b": {"type": "number"},
+    ...     },
+    ... }
+    >>> stream = ErrorStream(
+    ...     Draft202012Validator(schema).iter_errors({"a": "x", "b": "y"}),
+    ...     max_errors=1,
+    ... )
+    >>> [error.path[0] for error in stream]
+    ['a']
+    >>> stream.complete
+    False
+
+A stream that is not complete must not be treated as valid -- validation
+was stopped, not finished. Closing the stream releases the underlying
+generator (and any resources it holds, such as reference-resolver scopes):
+
+.. doctest::
+
+    >>> stream = ErrorStream(
+    ...     Draft202012Validator(schema).iter_errors({"a": "x", "b": "y"}),
+    ... )
+    >>> first = next(stream)
+    >>> stream.close()
+    >>> stream.complete
+    False
+
+Iterating to exhaustion yields the errors in the validator's original
+order and marks the stream complete:
+
+.. doctest::
+
+    >>> stream = ErrorStream(
+    ...     Draft202012Validator(schema).iter_errors({"a": "x", "b": "y"}),
+    ... )
+    >>> [error.path[0] for error in stream]
+    ['a', 'b']
+    >>> stream.complete
+    True
+
+A zero budget means no validation work is done at all -- the underlying
+generator is never started:
+
+.. doctest::
+
+    >>> stream = ErrorStream(
+    ...     Draft202012Validator(schema).iter_errors({"a": "x", "b": "y"}),
+    ...     budget=lambda: False,
+    ... )
+    >>> list(stream)
+    []
+    >>> stream.complete
+    False
+
+The errors are yielded unchanged and in order: nested errors stay
+attached to their parent in `ValidationError.context` rather than being
+split into separate validations, and the stream never runs the
+`~jsonschema.protocols.Validator.is_valid` method.
+
+.. autoclass:: jsonschema.ErrorStream
+    :members:
