@@ -303,6 +303,125 @@ class TestCreateAndExtend(TestCase):
         self.assertTrue(Derived(schema).is_valid(37))
 
 
+class TestErrorStream(TestCase):
+    """
+    Tests for the bounded, closable `iter_errors` wrapper.
+
+    Run just these with::
+
+        python -m pytest jsonschema/tests/test_validators.py -k ErrorStream
+    """
+
+    def counting_fail(self, calls, released):
+        def fail(validator, errors, instance, schema):
+            calls.append(1)
+            try:
+                for each in errors:
+                    yield exceptions.ValidationError(each)
+            finally:
+                released.append(True)
+        return fail
+
+    def make_validator(self, calls, released):
+        Validator = validators.create(
+            meta_schema={"$id": "some://meta/schema"},
+            validators={"fail": self.counting_fail(calls, released)},
+            type_checker=TypeChecker(),
+        )
+        schema = {"fail": ["first", "second", "third"]}
+        return Validator(schema), Validator(schema).iter_errors(12)
+
+    def test_zero_budget_runs_no_validation(self):
+        calls, released = [], []
+        validator, _ = self.make_validator(calls, released)
+
+        stream = validator.iter_errors_stream(12, max_errors=0)
+
+        self.assertEqual(list(stream), [])
+        self.assertEqual(calls, [])  # validation never ran
+        self.assertFalse(stream.complete)
+        self.assertTrue(stream.closed)
+
+    def test_one_error_then_close_is_incomplete(self):
+        calls, released = [], []
+        validator, _ = self.make_validator(calls, released)
+
+        stream = validator.iter_errors_stream(12)
+        first = next(stream)
+        self.assertEqual(first.message, "first")
+        stream.close()
+
+        self.assertFalse(stream.complete)
+        self.assertTrue(stream.closed)
+        self.assertEqual(released, [True])  # underlying generator released
+        self.assertEqual(list(stream), [])  # stays closed
+        self.assertEqual(len(calls), 1)  # no extra validation happened
+
+    def test_context_manager_close_is_incomplete(self):
+        calls, released = [], []
+        validator, _ = self.make_validator(calls, released)
+
+        with validator.iter_errors_stream(12, max_errors=1) as stream:
+            self.assertEqual([error.message for error in stream], ["first"])
+        self.assertFalse(stream.complete)
+        self.assertEqual(released, [True])
+
+    def test_full_iteration_is_complete_and_ordered(self):
+        calls, released = [], []
+        validator, plain_errors = self.make_validator(calls, released)
+
+        self.assertEqual(
+            [error.message for error in plain_errors],
+            ["first", "second", "third"],
+        )
+        plain_calls = len(calls)
+
+        stream = validator.iter_errors_stream(12)
+        self.assertEqual(
+            [error.message for error in stream],
+            ["first", "second", "third"],
+        )
+        self.assertTrue(stream.complete)
+        self.assertEqual(stream.seen, 3)
+        # streaming did not run the keyword validators any extra times
+        self.assertEqual(len(calls), 2 * plain_calls)
+
+    def test_budget_larger_than_error_count_is_complete(self):
+        calls, released = [], []
+        validator, _ = self.make_validator(calls, released)
+
+        stream = validator.iter_errors_stream(12, max_errors=10)
+        self.assertEqual(len(list(stream)), 3)
+        self.assertTrue(stream.complete)
+
+    def test_negative_budget_is_rejected(self):
+        calls, released = [], []
+        validator, _ = self.make_validator(calls, released)
+
+        with self.assertRaises(ValueError):
+            validator.iter_errors_stream(12, max_errors=-1)
+
+    def test_nested_context_stays_on_its_error(self):
+        schema = {"anyOf": [{"type": "integer"}, {"type": "string"}]}
+        validator = validators.Draft202012Validator(schema)
+
+        with validator.iter_errors_stream([]) as stream:
+            [error] = stream
+            self.assertEqual(len(error.context), 2)
+            self.assertTrue(stream.complete)
+
+    def test_error_stream_class_is_exposed(self):
+        calls, released = [], []
+        validator, _ = self.make_validator(calls, released)
+
+        stream = validators.ErrorStream(validator, 12, max_errors=2)
+        self.assertEqual(
+            [error.message for error in stream],
+            ["first", "second"],
+        )
+        self.assertFalse(stream.complete)
+
+
 class TestValidationErrorMessages(TestCase):
     def message_for(self, instance, schema, *args, **kwargs):
         cls = kwargs.pop("cls", validators._LATEST_VERSION)

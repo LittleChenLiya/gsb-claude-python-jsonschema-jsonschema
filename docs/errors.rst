@@ -223,6 +223,38 @@ easier debugging.
         3
 
 
+Bounded error streams
+---------------------
+
+If you only need the first few errors -- or want to cap how much
+validation work is done -- you can wrap ``iter_errors`` in an
+`jsonschema.validators.ErrorStream` via
+``validator.iter_errors_stream(instance, max_errors=...)``.
+
+The stream yields errors in the same order as ``iter_errors`` and keeps
+nested ``context`` errors attached to their parent error. It never runs
+an extra validity check: its ``complete`` property is `True` only if
+the underlying validator was fully exhausted, so stopping early is
+never mistaken for the instance being valid. Closing the stream (which
+happens automatically when leaving the ``with`` block or when the
+error budget is spent) releases the underlying generator, and a budget
+of ``0`` means validation never runs at all.
+
+.. testcode::
+
+    schema = {"type": "integer", "minimum": 2, "multipleOf": 3}
+    v = Draft202012Validator(schema)
+    with v.iter_errors_stream("nope", max_errors=1) as stream:
+        for error in stream:
+            print(error.message)
+        print("complete?", stream.complete)
+
+.. testoutput::
+
+    'nope' is not of type 'integer'
+    complete? False
+
+
 ErrorTrees
 ----------
 

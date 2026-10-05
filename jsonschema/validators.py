@@ -133,6 +133,136 @@ _REMOTE_WARNING_REGISTRY = SPECIFICATIONS.combine(
 )
 
 
+class ErrorStream:
+    """
+    A bounded, closable stream over a validator's ``iter_errors``.
+
+    An `ErrorStream` wraps ``validator.iter_errors(instance)`` and lets
+    callers stop consuming errors early -- at most ``max_errors`` errors
+    -- without ever mistaking that early stop for the instance being
+    valid.
+
+    The stream is *complete* only when the underlying validator was
+    exhausted normally (i.e. every error it would produce was yielded).
+    Closing the stream early, or exhausting the error budget, leaves it
+    incomplete, and releases the underlying generator so that no further
+    validation work is performed.
+
+    Errors are yielded in exactly the order the validator produces them,
+    and each error is yielded whole -- nested ``context`` errors stay
+    attached to their parent error rather than being flattened into
+    additional pseudo-separate validation results.
+
+    No validation happens until the first error is requested, and no
+    extra ``is_valid``-style pass is ever performed: the schema's
+    keyword validators are never run more times than a plain full
+    ``iter_errors`` loop would run them.
+
+    .. doctest::
+
+        >>> from jsonschema import Draft202012Validator
+        >>> schema = {"type": "integer", "minimum": 2, "multipleOf": 3}
+        >>> validator = Draft202012Validator(schema)
+        >>> with validator.iter_errors_stream("nope", max_errors=1) as s:
+        ...     for error in s:
+        ...         print(error.message)
+        ...     print("complete?", s.complete)
+        'nope' is not of type 'integer'
+        complete? False
+
+    Arguments:
+
+        validator:
+
+            the validator whose ``iter_errors`` to wrap
+
+        instance:
+
+            the instance to validate
+
+        max_errors:
+
+            an optional budget of errors after which the stream stops
+            and closes itself; ``0`` means validation never runs
+
+    """
+
+    def __init__(self, validator, instance, max_errors=None):
+        if max_errors is not None and max_errors < 0:
+            raise ValueError("max_errors must be non-negative or None")
+        self._validator = validator
+        self._instance = instance
+        self._max_errors = max_errors
+        self._errors = None
+        self._seen = 0
+        self._complete = False
+        self._closed = False
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self._closed:
+            raise StopIteration
+        if self._max_errors is not None and self._seen >= self._max_errors:
+            # The budget is spent. We cannot know whether the validator
+            # had more errors, so the stream stays incomplete.
+            self.close()
+            raise StopIteration
+        if self._errors is None:
+            self._errors = self._validator.iter_errors(self._instance)
+        try:
+            error = next(self._errors)
+        except StopIteration:
+            self._complete = True
+            self.close()
+            raise
+        self._seen += 1
+        return error
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        self.close()
+
+    @property
+    def complete(self):
+        """
+        Whether the underlying validator was fully exhausted.
+
+        Only a stream which yielded every error the validator produced
+        is complete; a stream stopped early (by budget or by `close`)
+        is incomplete and says nothing about the instance's validity.
+        """
+        return self._complete
+
+    @property
+    def closed(self):
+        """Whether the stream (and its underlying generator) is closed."""
+        return self._closed
+
+    @property
+    def seen(self):
+        """The number of errors yielded so far."""
+        return self._seen
+
+    def close(self):
+        """
+        Close the stream, releasing the underlying error generator.
+
+        Closing early does not mark the stream complete.
+        """
+        if self._closed:
+            return
+        self._closed = True
+        errors, self._errors = self._errors, None
+        if errors is not None:
+            close = getattr(errors, "close", None)
+            if close is not None:
+                close()
+
+
 def create(
     meta_schema: referencing.jsonschema.ObjectSchema,
     validators: (
@@ -392,6 +522,18 @@ def create(
                     if k not in {"if", "$ref"}:
                         error.schema_path.appendleft(k)
                     yield error
+
+        def iter_errors_stream(self, instance, max_errors=None):
+            """
+            Iterate over this validator's errors, with an optional budget.
+
+            Returns an `ErrorStream` wrapping ``self.iter_errors``,
+            which can be stopped early (by error budget or by closing
+            it) and reports whether it was fully exhausted via its
+            `~ErrorStream.complete` property. Stopping early is never
+            treated as the instance being valid.
+            """
+            return ErrorStream(self, instance, max_errors=max_errors)
 
         def descend(
             self,

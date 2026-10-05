@@ -1,6 +1,10 @@
 v4.27.0
 =======
 
+* Add ``Validator.iter_errors_stream`` (and ``jsonschema.ErrorStream``), a bounded, closable wrapper over ``iter_errors``.
+  Callers can stop after a budget of errors and inspect ``stream.complete`` to tell a fully exhausted validator apart from an early stop, which is never treated as the instance being valid.
+  Closing the stream releases the underlying error generator, and a budget of ``0`` skips validation entirely.
+
 * Improve ``best_match`` for ``anyOf`` / ``oneOf`` errors: the most relevant error is now found within each subschema separately before the deepest of those is picked (#1257, #1300).
   In particular an applicator with a single subschema now produces the same best match as the bare subschema would.
   ``relevance`` no longer considers an error's position amongst its siblings.
